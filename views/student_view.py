@@ -181,15 +181,24 @@ def render_student_view(supabase, user, active_module=None):
     # MÓDULO 3: COMPRAR CLASES / RECARGAR P2P
     # ==============================================================================
     elif "Comprar Clases" in module:
-        st.subheader("🛒 Tienda de Clases de la Academia — Recargar Créditos")
-        st.caption("Elige tu paquete, realiza la transferencia por Binance o Nequi y adjunta la captura de tu comprobante:")
+        st.subheader("🛒 Tienda de Clases de la Academia — Seleccionar Paquete")
+        st.caption("Elige tu paquete o modalidad de coaching, realiza tu transferencia P2P y sube la captura de tu comprobante:")
 
-        # BANNER DE CONFIRMACIÓN EN VERDE (PERSISTENTE)
+        # Banner de bienvenida al estudiante recién registrado
+        if st.session_state.get("just_registered"):
+            st.info(
+                f"🎉 **¡Bienvenido a PerezLoL Coaching Academy, {current_name}!**  \n\n"
+                "Tu perfil de invocador ha sido creado exitosamente. Para comenzar tus entrenamientos personalizados con el Coach, "
+                "escoge a continuación el paquete que deseas adquirir y sube tu comprobante de pago.",
+                icon="🎮"
+            )
+
+        # BANNER DE CONFIRMACIÓN EN VERDE (PERSISTENTE TRAS SUBIR COMPROBANTE)
         if st.session_state.get("payment_sent_success"):
             st.success(
                 "🎉 **¡SOLICITUD DE COMPRA Y COMPROBANTE ENVIADOS CON ÉXITO!**  \n\n"
-                "Tu comprobante ha sido registrado correctamente. El Coach Perez revisará tu transferencia y te acreditará las clases correspondientes en tu Aula.  \n"
-                "👉 Puedes verificar el estado de aprobación en el módulo **'📑 Historial de Comprobantes'**.",
+                "Tu comprobante ha sido registrado correctamente. El Administrador verificará tu transferencia y te acreditará las clases correspondientes en tu Aula Virtual.  \n"
+                "👉 Puedes consultar el estado de tu pago en la pestaña **'📑 Historial de Comprobantes'**.",
                 icon="✅"
             )
             st.balloons()
@@ -198,71 +207,85 @@ def render_student_view(supabase, user, active_module=None):
                 st.rerun()
             st.divider()
 
-        # Catálogo de Paquetes
-        c_k1, c_k2 = st.columns(2)
-        with c_k1:
-            with st.container(border=True):
-                st.markdown("#### 🌟 Pack Primer Coaching (Recomendado)")
-                st.markdown("**$14.00 USD** | 1 LIVE Game + 3 VOD Reviews")
-                st.caption("La mejor forma de iniciar: 1 clase en vivo para auditar tus hábitos y 3 VODs semanales para pulir.")
-            with st.container(border=True):
-                st.markdown("#### 🎬 Pack 4 VODs Reviews")
-                st.markdown("**$12.00 USD** | 4 Revisiones de Repetición (Ahorras $2)")
-                st.caption("Recomendado 1 por semana para afianzar conceptos antes de la siguiente clase.")
+        # --------------------------------------------------------------------------
+        # CATÁLOGO DINÁMICO DE PAQUETES Y MODOS DE COACHING
+        # --------------------------------------------------------------------------
+        db_packages = get_packages(supabase) if supabase else []
+        if not db_packages:
+            db_packages = [
+                {"id": "p1", "title": "Pack Primer Coaching (Recomendado)", "price": 14.00, "vod_classes": 3, "live_classes": 1, "description": "1 clase en vivo para auditar tus hábitos y 3 VODs semanales para pulir micro y macro."},
+                {"id": "p2", "title": "Pack 4 VODs Reviews", "price": 12.00, "vod_classes": 4, "live_classes": 0, "description": "4 revisiones minuciosas de partidas grabadas para afianzar conceptos clave."},
+                {"id": "p3", "title": "1 LIVE GAME Coaching", "price": 5.00, "vod_classes": 0, "live_classes": 1, "description": "1 partida en directo vía Discord con análisis de decisiones en tiempo real."},
+                {"id": "p4", "title": "1 Sesión VOD Review", "price": 3.50, "vod_classes": 1, "live_classes": 0, "description": "Revisión individual detallada con entrega de puntos prioritarios de mejora."}
+            ]
 
-        with c_k2:
-            with st.container(border=True):
-                st.markdown("#### 🔴 1 LIVE GAME Coaching")
-                st.markdown("**$5.00 USD** | 1 Game en directo vía Discord")
-                st.caption("Toma de decisiones en vivo con Review post-game (30 a 60 min) y tareas.")
-            with st.container(border=True):
-                st.markdown("#### 📹 1 Sesión VOD Review")
-                st.markdown("**$3.50 USD** | 1 Revisión individual")
-                st.caption("Análisis minucioso de 1 repetición grabada con entrega de puntos a mejorar.")
+        st.markdown("#### 🌟 Modos de Coaching Disponibles")
+        
+        # Renderizar en 2 columnas elegantes
+        cols = st.columns(2)
+        for i, pkg in enumerate(db_packages):
+            col_target = cols[i % 2]
+            with col_target:
+                p_id = pkg.get("id")
+                p_title = pkg.get("title", "Paquete Coaching")
+                p_price = pkg.get("price", 0.0)
+                p_vod = pkg.get("vod_classes", 0)
+                p_live = pkg.get("live_classes", 0)
+                p_desc = pkg.get("description", "Sesiones personalizadas de League of Legends.")
+
+                with st.container(border=True):
+                    st.markdown(f"### **{p_title}**")
+                    st.markdown(f"💰 :green[**${p_price:.2f} USD**] | 📹 **{p_vod} VODs** + 🔴 **{p_live} LIVEs**")
+                    st.write(p_desc)
+                    if st.button(f"👉 Escoger este Paquete (${p_price:.2f} USD)", key=f"btn_pick_pkg_{p_id}", use_container_width=True):
+                        st.session_state["preselected_pkg_id"] = p_id
+                        st.rerun()
 
         st.divider()
-        st.subheader("Subir Comprobante de Transferencia")
+        st.subheader("Subir Comprobante de Transferencia P2P")
 
-        db_packages = get_packages(supabase) if supabase else []
+        # Mapeo de paquetes para el formulario
         pkg_menu = {}
-        if db_packages:
-            for p in db_packages:
-                pkg_menu[f"{p.get('title')} — ${p.get('price')} USD"] = p
-        else:
-            pkg_menu["Pack Primer Coaching ($14 USD)"] = {"id": "p1", "price": 14.00}
-            pkg_menu["Pack 4 VODs ($12 USD)"] = {"id": "p2", "price": 12.00}
-            pkg_menu["1 LIVE GAME ($5 USD)"] = {"id": "p3", "price": 5.00}
-            pkg_menu["1 VOD Review ($3.50 USD)"] = {"id": "p4", "price": 3.50}
+        for p in db_packages:
+            pkg_menu[f"{p.get('title')} — ${p.get('price'):.2f} USD"] = p
 
-        sel_p_label = st.selectbox("Paquete que adquiriste", list(pkg_menu.keys()))
+        # Calcular índice preseleccionado
+        pre_idx = 0
+        if "preselected_pkg_id" in st.session_state:
+            for idx, p in enumerate(db_packages):
+                if p.get("id") == st.session_state["preselected_pkg_id"]:
+                    pre_idx = idx
+                    break
+
+        sel_p_label = st.selectbox("Paquete Seleccionado a Adquirir", list(pkg_menu.keys()), index=pre_idx)
         selected_pkg_obj = pkg_menu[sel_p_label]
 
-        # Caja de coordinación con el coach
+        # Caja de canales oficiales de pago
         with st.container(border=True):
             st.markdown("#### 💳 Canales Oficiales de Pago P2P")
             st.markdown(
-                "Para realizar tu transferencia, solicita los datos al Coach Perez por Discord:  \n"
-                "• **Binance Pay (USDT):** Solicita el Pay ID al Coach por Discord: `perez1473`.  \n"
-                "• **Nequi (Colombia):** Solicita el número de cuenta / QR al Coach por Discord: `perez1473`."
+                "Realiza tu pago por cualquiera de los siguientes medios oficiales:  \n"
+                "• **Binance Pay (USDT):** Solicita el Pay ID al Staff o Coach por Discord: `perez1473`.  \n"
+                "• **Nequi / Bancolombia (Colombia):** Solicita el número de cuenta o código QR por Discord: `perez1473`."
             )
             col_co1, col_co2 = st.columns([2, 1])
             with col_co1:
-                st.markdown("🎙️ **Discord Oficial del Coach:** `perez1473`")
+                st.markdown("🎙️ **Discord Oficial:** `perez1473` (Perez)")
             with col_co2:
-                st.link_button("💬 Hablar con el Coach en Discord", "https://discord.com/app", use_container_width=True)
+                st.link_button("💬 Abrir Discord", "https://discord.com/app", use_container_width=True)
 
         col_f1, col_f2 = st.columns(2)
         with col_f1:
-            method_chosen = st.selectbox("Medio de Pago", ["Binance Pay (USDT)", "Nequi"])
-            st.metric("Total Transferido", f"${selected_pkg_obj.get('price', 0.0)} USD")
+            method_chosen = st.selectbox("Medio de Pago Utilizado", ["Binance Pay (USDT)", "Nequi", "Transferencia Bancaria", "Otro Medio"])
+            st.metric("Monto a Validar", f"${selected_pkg_obj.get('price', 0.0):.2f} USD")
         with col_f2:
             receipt_img = st.file_uploader("Adjunta foto o captura del comprobante *", type=["png", "jpg", "jpeg", "webp"])
             if receipt_img is not None:
-                st.image(receipt_img, caption="Vista previa", width=220)
+                st.image(receipt_img, caption="Vista previa del comprobante", width=220)
 
-        if st.button("Enviar Comprobante al Coach para Acreditación", type="primary", use_container_width=True):
+        if st.button("🚀 Enviar Comprobante para Acreditación", type="primary", use_container_width=True):
             if receipt_img is None:
-                st.warning("⚠️ Debes adjuntar la imagen del comprobante.")
+                st.warning("⚠️ Debes adjuntar la imagen del comprobante de transferencia.")
             elif not supabase:
                 st.session_state["payment_sent_success"] = True
                 st.rerun()
@@ -286,9 +309,9 @@ def render_student_view(supabase, user, active_module=None):
                         st.session_state["payment_sent_success"] = True
                         st.rerun()
                     else:
-                        st.error("Error al registrar comprobante en la base de datos.")
+                        st.error("Error al registrar el comprobante en la base de datos.")
                 except Exception as e:
-                    st.error(f"Error procesando imagen: {e}")
+                    st.error(f"Error al procesar el archivo: {e}")
 
     # ==============================================================================
     # MÓDULO 4: HISTORIAL DE COMPROBANTES

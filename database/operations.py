@@ -90,28 +90,39 @@ def enroll_new_student(supabase, email: str, password: str, full_name: str, riot
     clean_email = email.strip().lower()
     try:
         user_id = None
-        # Intentar crear a través de Auth
-        try:
-            res = supabase.auth.sign_up({
-                "email": clean_email,
-                "password": password,
-                "options": {
-                    "data": {
+        # 1. Intentar crear usuario confirmado mediante admin api
+        if hasattr(supabase.auth, "admin"):
+            try:
+                res = supabase.auth.admin.create_user({
+                    "email": clean_email,
+                    "password": password,
+                    "email_confirm": True,
+                    "user_metadata": {
                         "role": "student",
                         "full_name": full_name,
                         "riot_id": riot_id,
                         "discord_tag": discord_tag
                     }
-                }
-            })
-            if res.user:
-                user_id = res.user.id
-        except Exception:
-            pass
+                })
+                if res.user:
+                    user_id = res.user.id
+            except Exception as e_adm:
+                print(f"Aviso admin create_user: {e_adm}")
+
+        # 2. Fallback a sign_up
+        if not user_id:
+            try:
+                res = supabase.auth.sign_up({
+                    "email": clean_email,
+                    "password": password
+                })
+                if res.user:
+                    user_id = res.user.id
+            except Exception as e_sign:
+                print(f"Aviso auth sign_up: {e_sign}")
 
         if not user_id:
-            import uuid
-            user_id = str(uuid.uuid4())
+            return None
 
         upsert_profile(
             supabase=supabase,
@@ -126,6 +137,73 @@ def enroll_new_student(supabase, email: str, password: str, full_name: str, riot
     except Exception as e:
         print(f"Error al matricular estudiante: {e}")
         return None
+
+def register_student(supabase, email: str, password: str, full_name: str,
+                     riot_id: str, discord_tag: str, main_lane: str = "JUNGLE",
+                     current_tier: str = "EMERALD", current_rank: str = "IV",
+                     current_lp: int = 0) -> Optional[Dict[str, Any]]:
+    """Auto-registro de estudiante desde la pantalla de bienvenida."""
+    if not supabase or not email or not password:
+        return None
+    clean_email = email.strip().lower()
+    try:
+        user_id = None
+        # 1. Crear usuario confirmado en Supabase Auth
+        if hasattr(supabase.auth, "admin"):
+            try:
+                res = supabase.auth.admin.create_user({
+                    "email": clean_email,
+                    "password": password,
+                    "email_confirm": True,
+                    "user_metadata": {
+                        "role": "student",
+                        "full_name": full_name,
+                        "riot_id": riot_id,
+                        "discord_tag": discord_tag,
+                        "main_lane": main_lane
+                    }
+                })
+                if res.user:
+                    user_id = res.user.id
+            except Exception as e_adm:
+                print(f"Aviso admin create_user: {e_adm}")
+
+        # 2. Fallback sign_up
+        if not user_id:
+            try:
+                res = supabase.auth.sign_up({
+                    "email": clean_email,
+                    "password": password
+                })
+                if res.user:
+                    user_id = res.user.id
+            except Exception as e_auth:
+                print(f"Aviso auth sign_up: {e_auth}")
+
+        if not user_id:
+            return None
+
+        # 3. Guardar ficha de perfil en tabla profiles
+        profile_data = {
+            "id": user_id,
+            "email": clean_email,
+            "full_name": full_name,
+            "role": "student",
+            "riot_id": riot_id or "Invocador#LAN",
+            "discord_tag": discord_tag or "discord_user",
+            "main_lane": main_lane or "JUNGLE",
+            "current_tier": current_tier or "GOLD",
+            "current_rank": current_rank or "IV",
+            "current_lp": current_lp or 0,
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        supabase.table("profiles").upsert(profile_data).execute()
+        return profile_data
+    except Exception as e:
+        print(f"Error al auto-registrar estudiante: {e}")
+        return None
+
+
 
 # ==============================================================================
 # 2. PAQUETES Y TARIFAS
@@ -436,6 +514,42 @@ def toggle_task(supabase, task_id: str, is_completed: bool) -> bool:
         print(f"Error al actualizar tarea: {e}")
         return False
 
+def get_coach_tasks(supabase, coach_id: str = None) -> List[Dict[str, Any]]:
+    """Obtiene todas las tareas asignadas por el coach (con datos del alumno)."""
+    if not supabase:
+        return []
+    try:
+        # Intentar traer datos del perfil del alumno
+        q = supabase.table("tasks").select("*, profiles!student_id(full_name, email, riot_id, discord_tag)")
+        if coach_id:
+            q = q.eq("coach_id", coach_id)
+        res = q.order("created_at", desc=True).execute()
+        return res.data or []
+    except Exception as e:
+        # Fallback sin join
+        try:
+            q = supabase.table("tasks").select("*")
+            if coach_id:
+                q = q.eq("coach_id", coach_id)
+            res = q.order("created_at", desc=True).execute()
+            return res.data or []
+        except Exception:
+            return []
+
+def update_task_feedback(supabase, task_id: str, feedback: str) -> bool:
+    """Permite al coach dejar notas/feedback técnico sobre una tarea entregada."""
+    if not supabase or not task_id:
+        return False
+    try:
+        supabase.table("tasks").update({
+            "coach_feedback": feedback
+        }).eq("id", task_id).execute()
+        return True
+    except Exception as e:
+        print(f"Error al actualizar feedback de tarea: {e}")
+        return False
+
+
 def save_session_notes(supabase, session_id: str, coach_id: str, student_id: str,
                        strengths: str, areas_to_improve: str, pathing: str,
                        champion_pool: str, homework_summary: str) -> bool:
@@ -484,3 +598,380 @@ def update_user_role(supabase, user_id: str, new_role: str) -> bool:
     except Exception as e:
         print(f"Error al cambiar rol: {e}")
         return False
+
+# ==============================================================================
+# 7. CRUD AVANZADO DE ADMINISTRADOR
+# ==============================================================================
+
+# --- A. CRUD PAQUETES Y MODOS DE COACHING ---
+
+def get_all_packages_admin(supabase) -> List[Dict[str, Any]]:
+    """Obtiene todos los paquetes (activos e inactivos) para gestión de admin."""
+    if not supabase:
+        return []
+    try:
+        res = supabase.table("packages").select("*").order("created_at", desc=False).execute()
+        return res.data or []
+    except Exception as e:
+        print(f"Error al consultar paquetes admin: {e}")
+        return []
+
+def create_package(supabase, title: str, description: str, price: float,
+                   vod_classes: int, live_classes: int, service_type: str = "combo",
+                   is_recommended: bool = False, is_active: bool = True) -> bool:
+    """Crea un nuevo paquete o modo de coaching en el catálogo."""
+    if not supabase:
+        return False
+    try:
+        data = {
+            "title": title,
+            "description": description,
+            "price": price,
+            "vod_classes": vod_classes,
+            "live_classes": live_classes,
+            "service_type": service_type,
+            "is_recommended": is_recommended,
+            "is_active": is_active,
+            "currency": "USD"
+        }
+        supabase.table("packages").insert(data).execute()
+        return True
+    except Exception as e:
+        print(f"Error al crear paquete: {e}")
+        return False
+
+def update_package(supabase, package_id: str, title: str, description: str,
+                   price: float, vod_classes: int, live_classes: int,
+                   service_type: str = "combo", is_recommended: bool = False,
+                   is_active: bool = True) -> bool:
+    """Edita un paquete o modo de coaching existente."""
+    if not supabase or not package_id:
+        return False
+    try:
+        data = {
+            "title": title,
+            "description": description,
+            "price": price,
+            "vod_classes": vod_classes,
+            "live_classes": live_classes,
+            "service_type": service_type,
+            "is_recommended": is_recommended,
+            "is_active": is_active
+        }
+        supabase.table("packages").update(data).eq("id", package_id).execute()
+        return True
+    except Exception as e:
+        print(f"Error al actualizar paquete: {e}")
+        return False
+
+def delete_package(supabase, package_id: str) -> bool:
+    """Elimina un paquete del catálogo (o lo desactiva si tiene referencias)."""
+    if not supabase or not package_id:
+        return False
+    try:
+        try:
+            supabase.table("packages").delete().eq("id", package_id).execute()
+            return True
+        except Exception:
+            # Si tiene pagos o paquetes asociados, desactivar en lugar de romper integridad
+            supabase.table("packages").update({"is_active": False}).eq("id", package_id).execute()
+            return True
+    except Exception as e:
+        print(f"Error al eliminar paquete: {e}")
+        return False
+
+# --- B. CRUD ESTUDIANTES Y GESTIÓN DE CRÉDITOS ---
+
+def get_students_detailed(supabase) -> List[Dict[str, Any]]:
+    """Obtiene todos los estudiantes con sus paquetes de clases asociados."""
+    if not supabase:
+        return []
+    try:
+        res = (supabase.table("profiles")
+               .select("*, student_packages(*, packages(*))")
+               .eq("role", "student")
+               .order("created_at", desc=True)
+               .execute())
+        return res.data or []
+    except Exception as e:
+        print(f"Error al obtener estudiantes detallados: {e}")
+        try:
+            r = supabase.table("profiles").select("*").eq("role", "student").order("created_at", desc=True).execute()
+            return r.data or []
+        except Exception:
+            return []
+
+def update_student_profile(supabase, user_id: str, full_name: str, riot_id: str,
+                           discord_tag: str, current_tier: str, current_rank: str,
+                           current_lp: int, main_lane: str = "JUNGLE") -> bool:
+    """Actualiza los datos competitivos y de perfil de un estudiante."""
+    if not supabase or not user_id:
+        return False
+    try:
+        data = {
+            "full_name": full_name,
+            "riot_id": riot_id,
+            "discord_tag": discord_tag,
+            "current_tier": current_tier,
+            "current_rank": current_rank,
+            "current_lp": current_lp,
+            "main_lane": main_lane,
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        supabase.table("profiles").update(data).eq("id", user_id).execute()
+        return True
+    except Exception as e:
+        print(f"Error al actualizar estudiante: {e}")
+        return False
+
+def adjust_student_credits(supabase, student_id: str, vod_remaining: int,
+                           live_remaining: int, vod_total: int = None,
+                           live_total: int = None) -> bool:
+    """Ajusta o añade manualmente créditos a un estudiante."""
+    if not supabase or not student_id:
+        return False
+    try:
+        active_pkg = get_student_package(supabase, student_id)
+        if active_pkg:
+            update_data = {
+                "vod_classes_remaining": max(0, vod_remaining),
+                "live_classes_remaining": max(0, live_remaining)
+            }
+            if vod_total is not None:
+                update_data["vod_classes_total"] = vod_total
+            if live_total is not None:
+                update_data["live_classes_total"] = live_total
+            supabase.table("student_packages").update(update_data).eq("id", active_pkg["id"]).execute()
+            return True
+        else:
+            # Crear paquete activo directo para el alumno
+            pkgs = get_packages(supabase)
+            pkg_id = pkgs[0]["id"] if pkgs else None
+            data = {
+                "student_id": student_id,
+                "package_id": pkg_id,
+                "vod_classes_total": vod_total or vod_remaining,
+                "vod_classes_completed": 0,
+                "vod_classes_remaining": vod_remaining,
+                "live_classes_total": live_total or live_remaining,
+                "live_classes_completed": 0,
+                "live_classes_remaining": live_remaining,
+                "status": "active"
+            }
+            supabase.table("student_packages").insert(data).execute()
+            return True
+    except Exception as e:
+        print(f"Error al ajustar créditos del estudiante: {e}")
+        return False
+
+def delete_user(supabase, user_id: str) -> bool:
+    """Elimina el perfil de un usuario."""
+    if not supabase or not user_id:
+        return False
+    try:
+        supabase.table("profiles").delete().eq("id", user_id).execute()
+        return True
+    except Exception as e:
+        print(f"Error al eliminar usuario: {e}")
+        return False
+
+# --- C. CRUD SESIONES DE COACHING ---
+
+def get_all_sessions_admin(supabase) -> List[Dict[str, Any]]:
+    """Obtiene todas las sesiones registradas con datos de alumno y coach."""
+    if not supabase:
+        return []
+    try:
+        res = (supabase.table("sessions")
+               .select("*, student:profiles!student_id(email, full_name, riot_id, discord_tag), coach:profiles!coach_id(email, full_name, discord_tag)")
+               .order("scheduled_at", desc=True)
+               .execute())
+        return res.data or []
+    except Exception as e:
+        print(f"Error al consultar sesiones admin: {e}")
+        return []
+
+def admin_create_session(supabase, student_id: str, coach_id: str, service_type: str,
+                         role_lane: str, scheduled_at: str, duration_minutes: int = 45,
+                         discord_tag: str = "perez1473") -> bool:
+    """Crea una sesión de coaching directamente desde administración."""
+    return book_session(
+        supabase=supabase,
+        student_id=student_id,
+        service_type=service_type,
+        scheduled_at=scheduled_at,
+        coach_id=coach_id,
+        duration_minutes=duration_minutes,
+        vod_url="",
+        discord_tag=discord_tag,
+        role_lane=role_lane
+    )
+
+def admin_update_session(supabase, session_id: str, service_type: str,
+                         role_lane: str, scheduled_at: str, duration_minutes: int,
+                         status: str, coach_id: str = None) -> bool:
+    """Modifica fecha, hora, estado o coach de una sesión."""
+    if not supabase or not session_id:
+        return False
+    try:
+        data = {
+            "service_type": service_type,
+            "role_lane": role_lane,
+            "scheduled_at": scheduled_at,
+            "duration_minutes": duration_minutes,
+            "status": status,
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        if coach_id:
+            data["coach_id"] = coach_id
+        supabase.table("sessions").update(data).eq("id", session_id).execute()
+        return True
+    except Exception as e:
+        print(f"Error al actualizar sesión: {e}")
+        return False
+
+def admin_delete_session(supabase, session_id: str) -> bool:
+    """Elimina una sesión agendada."""
+    if not supabase or not session_id:
+        return False
+    try:
+        supabase.table("sessions").delete().eq("id", session_id).execute()
+        return True
+    except Exception as e:
+        print(f"Error al eliminar sesión: {e}")
+        return False
+
+# --- D. CRUD PAGOS P2P ---
+
+def get_all_payments_admin(supabase) -> List[Dict[str, Any]]:
+    """Obtiene el historial completo de pagos con datos de alumnos y paquetes."""
+    if not supabase:
+        return []
+    try:
+        res = (supabase.table("payments")
+               .select("*, profiles!student_id(email, full_name, riot_id, discord_tag), packages(title, price)")
+               .order("created_at", desc=True)
+               .execute())
+        return res.data or []
+    except Exception as e:
+        print(f"Error al consultar pagos admin: {e}")
+        return []
+
+def admin_create_payment(supabase, student_id: str, package_id: str, amount: float,
+                         payment_method: str, status: str = "approved",
+                         auto_credit: bool = True) -> bool:
+    """Registra un pago manual y opcionalmente acredita las clases al alumno."""
+    if not supabase or not student_id:
+        return False
+    try:
+        data = {
+            "student_id": student_id,
+            "package_id": package_id or None,
+            "amount": amount,
+            "payment_method": payment_method,
+            "reference_number": "MANUAL-ADMIN",
+            "receipt_url": "",
+            "status": status,
+            "created_at": datetime.utcnow().isoformat()
+        }
+        res = supabase.table("payments").insert(data).execute()
+        
+        # Si se marca aprobado y se desea auto-acreditar
+        if auto_credit and status == "approved" and package_id:
+            pkg_res = supabase.table("packages").select("*").eq("id", package_id).maybe_single().execute()
+            if pkg_res.data:
+                pkg = pkg_res.data
+                vods = pkg.get("vod_classes", 0)
+                lives = pkg.get("live_classes", 0)
+                
+                # Acreditar al student_package activo o crear uno
+                active_sp = get_student_package(supabase, student_id)
+                if active_sp:
+                    supabase.table("student_packages").update({
+                        "vod_classes_total": active_sp.get("vod_classes_total", 0) + vods,
+                        "vod_classes_remaining": active_sp.get("vod_classes_remaining", 0) + vods,
+                        "live_classes_total": active_sp.get("live_classes_total", 0) + lives,
+                        "live_classes_remaining": active_sp.get("live_classes_remaining", 0) + lives
+                    }).eq("id", active_sp["id"]).execute()
+                else:
+                    supabase.table("student_packages").insert({
+                        "student_id": student_id,
+                        "package_id": package_id,
+                        "vod_classes_total": vods,
+                        "vod_classes_completed": 0,
+                        "vod_classes_remaining": vods,
+                        "live_classes_total": lives,
+                        "live_classes_completed": 0,
+                        "live_classes_remaining": lives,
+                        "status": "active"
+                    }).execute()
+        return True
+    except Exception as e:
+        print(f"Error al registrar pago manual: {e}")
+        return False
+
+def admin_update_payment(supabase, payment_id: str, status: str,
+                         amount: float = None, payment_method: str = None,
+                         notes: str = "") -> bool:
+    """Actualiza el estado, monto o método de un pago."""
+    if not supabase or not payment_id:
+        return False
+    try:
+        update_data = {
+            "status": status,
+            "reviewed_at": datetime.utcnow().isoformat()
+        }
+        if amount is not None:
+            update_data["amount"] = amount
+        if payment_method:
+            update_data["payment_method"] = payment_method
+        if notes:
+            update_data["notes"] = notes
+            
+        supabase.table("payments").update(update_data).eq("id", payment_id).execute()
+        
+        # Si se aprobó el pago, acreditar las clases
+        if status == "approved":
+            p_res = supabase.table("payments").select("*, packages(*)").eq("id", payment_id).maybe_single().execute()
+            if p_res.data and p_res.data.get("packages"):
+                pkg = p_res.data["packages"]
+                st_id = p_res.data.get("student_id")
+                vods = pkg.get("vod_classes", 0)
+                lives = pkg.get("live_classes", 0)
+                
+                active_sp = get_student_package(supabase, st_id)
+                if active_sp:
+                    supabase.table("student_packages").update({
+                        "vod_classes_total": active_sp.get("vod_classes_total", 0) + vods,
+                        "vod_classes_remaining": active_sp.get("vod_classes_remaining", 0) + vods,
+                        "live_classes_total": active_sp.get("live_classes_total", 0) + lives,
+                        "live_classes_remaining": active_sp.get("live_classes_remaining", 0) + lives
+                    }).eq("id", active_sp["id"]).execute()
+                else:
+                    supabase.table("student_packages").insert({
+                        "student_id": st_id,
+                        "package_id": pkg.get("id"),
+                        "vod_classes_total": vods,
+                        "vod_classes_completed": 0,
+                        "vod_classes_remaining": vods,
+                        "live_classes_total": lives,
+                        "live_classes_completed": 0,
+                        "live_classes_remaining": lives,
+                        "status": "active"
+                    }).execute()
+        return True
+    except Exception as e:
+        print(f"Error al actualizar pago admin: {e}")
+        return False
+
+def admin_delete_payment(supabase, payment_id: str) -> bool:
+    """Elimina un registro de pago."""
+    if not supabase or not payment_id:
+        return False
+    try:
+        supabase.table("payments").delete().eq("id", payment_id).execute()
+        return True
+    except Exception as e:
+        print(f"Error al eliminar pago: {e}")
+        return False
+

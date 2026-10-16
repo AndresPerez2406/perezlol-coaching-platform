@@ -4,27 +4,14 @@ from views.login import render_login
 from views.student_view import render_student_view
 from views.coach_view import render_coach_view
 from views.admin_view import render_admin_view
+from styles.theme import get_theme_css
 
 st.set_page_config(
-    page_title="PerezLoL Campus Virtual | Only JG",
+    page_title="PerezLoL Campus Virtual | LoL Coaching",
     page_icon="🌲",
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-# Custom LoL Hextech Jungle Theme Styling
-st.markdown("""
-<style>
-    .main-title {
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        color: #C89B3C;
-        text-shadow: 0 0 10px rgba(200, 155, 60, 0.3);
-    }
-    .stButton>button {
-        border-radius: 8px;
-    }
-</style>
-""", unsafe_allow_html=True)
 
 def main():
     supabase = get_supabase_client()
@@ -32,11 +19,27 @@ def main():
     # Inicializar estado de sesión
     if "user" not in st.session_state:
         st.session_state["user"] = None
+    if "theme" not in st.session_state:
+        st.session_state["theme"] = "dark"
+
+    # Inyectar estilos del tema activo (Oscuro / Claro)
+    st.markdown(get_theme_css(st.session_state["theme"]), unsafe_allow_html=True)
 
     selected_module = None
         
     with st.sidebar:
-        st.title("🌲 PerezLoL Campus")
+        # Cabecera con botón rápido de cambio de tema
+        col_sb_title, col_sb_theme = st.columns([3, 1])
+        with col_sb_title:
+            st.title("🌲 PerezLoL")
+        with col_sb_theme:
+            st.write("")
+            cur_th = st.session_state.get("theme", "dark")
+            icon_btn = "☀️" if cur_th == "dark" else "🌙"
+            if st.button(icon_btn, key="top_theme_toggle_btn", use_container_width=True):
+                st.session_state["theme"] = "light" if cur_th == "dark" else "dark"
+                st.rerun()
+
         st.caption("Campus Virtual & Academia de Coaching | **League of Legends**")
         
         if st.session_state["user"]:
@@ -60,7 +63,11 @@ def main():
                     "📑 Historial de Comprobantes",
                     "👤 Mi Perfil & Ajustes"
                 ]
-                selected_module = st.radio("Navegación:", student_modules, label_visibility="collapsed")
+                default_st_idx = 0
+                if st.session_state.get("just_registered") or st.session_state.get("student_target_module") == "🛒 Comprar Clases / Recargar (P2P)":
+                    default_st_idx = 2
+
+                selected_module = st.radio("Navegación:", student_modules, index=default_st_idx, label_visibility="collapsed")
 
                 st.write("")
                 with st.container(border=True):
@@ -69,15 +76,18 @@ def main():
                     st.link_button("Abrir Discord", "https://discord.com/app", use_container_width=True)
 
             elif real_role == "coach":
-                st.markdown("### 📋 Menú de Gestión del Coach")
+                st.markdown("### 📋 Menú del Coach")
                 coach_modules = [
-                    "👥 Gestión de Estudiantes",
-                    "📅 Programar Clases para Alumnos",
-                    "💰 Aprobar Pagos P2P (Chulear)",
-                    "📝 Dejar Tareas y Notas Técnicas",
-                    "➕ Matricular Nuevo Alumno"
+                    "👥 Mis Estudiantes Asignados",
+                    "📅 Programar y Gestionar Clases",
+                    "📝 Asignar Tareas y Misiones Técnicas"
                 ]
-                selected_module = st.radio("Navegación:", coach_modules, label_visibility="collapsed")
+                coach_idx = 0
+                if st.session_state.get("coach_active_mod") in coach_modules:
+                    coach_idx = coach_modules.index(st.session_state["coach_active_mod"])
+                    st.session_state["coach_active_mod"] = None
+
+                selected_module = st.radio("Navegación:", coach_modules, index=coach_idx, label_visibility="collapsed")
 
             elif real_role == "admin":
                 st.markdown("### 🛡️ Menú de Administración")
@@ -87,7 +97,7 @@ def main():
                     real_role = "student"
                     student_modules = [
                         "📊 Mi Aula & Clases Activas",
-                        "🎯 Misiones & Tareas JG",
+                        "🎯 Misiones & Tareas Técnicas",
                         "🛒 Comprar Clases / Recargar (P2P)",
                         "📑 Historial de Comprobantes",
                         "👤 Mi Perfil & Ajustes"
@@ -96,22 +106,21 @@ def main():
                 elif active_view == "Vista Coach":
                     real_role = "coach"
                     coach_modules = [
-                        "👥 Gestión de Estudiantes",
-                        "📅 Programar Clases para Alumnos",
-                        "💰 Aprobar Pagos P2P (Chulear)",
-                        "📝 Dejar Tareas y Notas Técnicas",
-                        "➕ Matricular Nuevo Alumno"
+                        "👥 Mis Estudiantes Asignados",
+                        "📅 Programar y Gestionar Clases",
+                        "📝 Asignar Tareas y Misiones Técnicas"
                     ]
                     selected_module = st.radio("Navegación:", coach_modules, label_visibility="collapsed")
                 else:
                     admin_modules = [
-                        "👥 Gestión de Usuarios y Roles",
-                        "📦 Catálogo de Paquetes",
-                        "📑 Auditoría Global de Pagos"
+                        "📦 Paquetes & Modos de Coaching",
+                        "🎓 CRUD de Estudiantes",
+                        "🎮 Agenda & Control de Coaching",
+                        "💰 CRUD y Auditoría de Pagos",
+                        "🛡️ Gestión de Coaches y Roles"
                     ]
                     selected_module = st.radio("Navegación:", admin_modules, label_visibility="collapsed")
 
-            st.divider()
             if st.button("🚪 Cerrar Sesión", use_container_width=True):
                 if supabase:
                     try:
